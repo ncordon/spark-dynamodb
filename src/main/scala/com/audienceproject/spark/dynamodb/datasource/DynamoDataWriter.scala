@@ -23,6 +23,7 @@ package com.audienceproject.spark.dynamodb.datasource
 import com.amazonaws.services.dynamodbv2.document.DynamoDB
 import com.audienceproject.shaded.google.common.util.concurrent.RateLimiter
 import com.audienceproject.spark.dynamodb.connector.{ColumnSchema, TableConnector}
+import com.audienceproject.spark.dynamodb.util.ResponsiveRateLimiter
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.write.{DataWriter, WriterCommitMessage}
 
@@ -35,7 +36,7 @@ class DynamoDataWriter(batchSize: Int,
     extends DataWriter[InternalRow] {
 
     protected val buffer: ArrayBuffer[InternalRow] = new ArrayBuffer[InternalRow](batchSize)
-    protected val rateLimiter: RateLimiter = RateLimiter.create(connector.writeLimit)
+    protected val rateLimiter: ResponsiveRateLimiter = new ResponsiveRateLimiter(connector.writeLimit)
 
     override def write(record: InternalRow): Unit = {
         buffer += record.copy()

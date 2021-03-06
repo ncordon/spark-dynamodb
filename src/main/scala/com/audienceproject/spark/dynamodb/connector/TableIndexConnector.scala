@@ -22,8 +22,9 @@ package com.audienceproject.spark.dynamodb.connector
 
 import com.amazonaws.services.dynamodbv2.document.spec.ScanSpec
 import com.amazonaws.services.dynamodbv2.document.{ItemCollection, ScanOutcome}
-import com.amazonaws.services.dynamodbv2.model.ReturnConsumedCapacity
+import com.amazonaws.services.dynamodbv2.model.{GlobalSecondaryIndexDescription, ReturnConsumedCapacity, TableDescription}
 import com.amazonaws.services.dynamodbv2.xspec.ExpressionSpecBuilder
+import com.audienceproject.spark.dynamodb.util.VariableRefresher
 import org.apache.spark.sql.sources.Filter
 
 import scala.collection.JavaConverters._
@@ -36,12 +37,15 @@ private[dynamodb] class TableIndexConnector(tableName: String, indexName: String
     private val region = parameters.get("region")
     private val roleArn = parameters.get("roleArn")
     private val providerClassName = parameters.get("providerclassname")
+    private val table = getDynamoDB(region, roleArn, providerClassName).getTable(tableName)
+    private val refreshedIndexDesc: VariableRefresher[GlobalSecondaryIndexDescription] = new VariableRefresher(
+        () => table.describe().getGlobalSecondaryIndexes.asScala.find(_.getIndexName == indexName).get
+    )
 
     override val filterPushdownEnabled: Boolean = filterPushdown
 
-    override val (keySchema, readLimit, itemLimit, totalSegments) = {
-        val table = getDynamoDB(region, roleArn, providerClassName).getTable(tableName)
-        val indexDesc = table.describe().getGlobalSecondaryIndexes.asScala.find(_.getIndexName == indexName).get
+    override val (keySchema, itemLimit, totalSegments) = {
+        val indexDesc = refreshedIndexDesc.get()
 
         // Key schema.
         val keySchema = KeySchema.fromDescription(indexDesc.getKeySchema.asScala)
@@ -49,7 +53,6 @@ private[dynamodb] class TableIndexConnector(tableName: String, indexName: String
         // User parameters.
         val bytesPerRCU = parameters.getOrElse("bytesPerRCU", "4000").toInt
         val maxPartitionBytes = parameters.getOrElse("maxpartitionbytes", "128000000").toInt
-        val targetCapacity = parameters.getOrElse("targetCapacity", "1").toDouble
         val readFactor = if (consistentRead) 1 else 2
 
         // Table parameters.
@@ -63,20 +66,27 @@ private[dynamodb] class TableIndexConnector(tableName: String, indexName: String
             if (remainder > 0) sizeBased + (parallelism - remainder)
             else sizeBased
         })
+        // Rate limit calculation.
+        val avgItemSize = indexSize.toDouble / itemCount
+
+        val rateLimit = readLimit()
+        val itemLimit = ((bytesPerRCU / avgItemSize * rateLimit).toInt * readFactor) max 1
+
+        (keySchema, itemLimit, numPartitions)
+    }
+
+    override def readLimit(): Double = {
+        val indexDesc = refreshedIndexDesc.get()
+        val targetCapacity = parameters.getOrElse("targetCapacity", "1").toDouble
 
         // Provisioned or on-demand throughput.
         val readThroughput = parameters.getOrElse("throughput", Option(indexDesc.getProvisionedThroughput.getReadCapacityUnits)
             .filter(_ > 0).map(_.longValue().toString)
             .getOrElse("100")).toLong
 
-        // Rate limit calculation.
-        val avgItemSize = indexSize.toDouble / itemCount
         val readCapacity = readThroughput * targetCapacity
 
-        val rateLimit = readCapacity / parallelism
-        val itemLimit = ((bytesPerRCU / avgItemSize * rateLimit).toInt * readFactor) max 1
-
-        (keySchema, rateLimit, itemLimit, numPartitions)
+        readCapacity / parallelism
     }
 
     override def scan(segmentNum: Int, columns: Seq[String], filters: Seq[Filter]): ItemCollection[ScanOutcome] = {

@@ -23,6 +23,7 @@ package com.audienceproject.spark.dynamodb.datasource
 import com.amazonaws.services.dynamodbv2.document.Item
 import com.audienceproject.shaded.google.common.util.concurrent.RateLimiter
 import com.audienceproject.spark.dynamodb.connector.DynamoConnector
+import com.audienceproject.spark.dynamodb.util.ResponsiveRateLimiter
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReader, PartitionReaderFactory}
 import org.apache.spark.sql.types.{StructField, StructType}
@@ -51,7 +52,7 @@ class DynamoReaderFactory(connector: DynamoConnector,
         import scanPartition._
 
         private val pageIterator = connector.scan(partitionIndex, requiredColumns, filters).pages().iterator().asScala
-        private val rateLimiter = RateLimiter.create(connector.readLimit)
+        private val rateLimiter = new ResponsiveRateLimiter(connector.readLimit)
 
         private var innerIterator: Iterator[InternalRow] = Iterator.empty
 
