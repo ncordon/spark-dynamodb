@@ -37,9 +37,11 @@ private[dynamodb] class TableIndexConnector(tableName: String, indexName: String
     private val region = parameters.get("region")
     private val roleArn = parameters.get("roleArn")
     private val providerClassName = parameters.get("providerclassname")
-    private val table = getDynamoDB(region, roleArn, providerClassName).getTable(tableName)
     private val refreshedIndexDesc: VariableRefresher[GlobalSecondaryIndexDescription] = new VariableRefresher(
-        () => table.describe().getGlobalSecondaryIndexes.asScala.find(_.getIndexName == indexName).get
+        () => {
+            val table = getDynamoDB(region, roleArn, providerClassName).getTable(tableName)
+            table.describe().getGlobalSecondaryIndexes.asScala.find(_.getIndexName == indexName).get
+        }
     )
 
     override val filterPushdownEnabled: Boolean = filterPushdown

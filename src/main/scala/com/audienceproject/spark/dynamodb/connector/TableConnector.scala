@@ -42,13 +42,16 @@ private[dynamodb] class TableConnector(tableName: String, parallelism: Int, para
     private val providerClassName = parameters.get("providerclassname")
 
     private val targetCapacity = parameters.getOrElse("targetcapacity", "1").toDouble
-    private val table = getDynamoDB(region, roleArn, providerClassName).getTable(tableName)
-    private val tableDesc: VariableRefresher[TableDescription] = new VariableRefresher(() => table.describe())
+    private val refreshedTableDesc: VariableRefresher[TableDescription] = new VariableRefresher(() =>
+        getDynamoDB(region, roleArn, providerClassName)
+            .getTable(tableName)
+            .describe()
+    )
 
     override val filterPushdownEnabled: Boolean = filterPushdown
 
     override val (keySchema, itemLimit, totalSegments) = {
-        val desc = tableDesc.get()
+        val desc = refreshedTableDesc.get()
         // Key schema.
         val keySchema = KeySchema.fromDescription(desc.getKeySchema.asScala)
 
@@ -78,7 +81,7 @@ private[dynamodb] class TableConnector(tableName: String, parallelism: Int, para
     }
 
     def readLimit(): Double = {
-        val desc = tableDesc.get()
+        val desc = refreshedTableDesc.get()
         // Provisioned or on-demand throughput.
         val readThroughput = parameters.getOrElse("throughput", Option(desc.getProvisionedThroughput.getReadCapacityUnits)
             .filter(_ > 0).map(_.longValue().toString)
@@ -89,7 +92,7 @@ private[dynamodb] class TableConnector(tableName: String, parallelism: Int, para
     }
 
     def writeLimit(): Double = {
-        val desc = tableDesc.get()
+        val desc = refreshedTableDesc.get()
         val writeThroughput = parameters.getOrElse("throughput", Option(desc.getProvisionedThroughput.getWriteCapacityUnits)
             .filter(_ > 0).map(_.longValue().toString)
             .getOrElse("100")).toLong
